@@ -16,9 +16,18 @@ use serde_json::json;
 pub(crate) async fn handle_torrent_add(
     api_token: &str,
     payload: &web::Json<TransmissionRequest>,
+    app_data: &web::Data<AppData>,
 ) -> Result<Option<serde_json::Value>> {
     let arguments = payload.arguments.as_ref().unwrap().as_object().unwrap();
-    if arguments.contains_key("metainfo") {
+
+    // Extract labels sent by Radarr/Sonarr
+    let labels: Vec<String> = arguments
+        .get("labels")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    let hash: Option<String> = if arguments.contains_key("metainfo") {
         // .torrent files
         let b64 = arguments["metainfo"].as_str().unwrap();
         let bytes = base64::engine::general_purpose::STANDARD
@@ -28,14 +37,17 @@ pub(crate) async fn handle_torrent_add(
 
         match Torrent::read_from_bytes(bytes) {
             Ok(t) => {
-                // let name = t.name;
                 info!(
                     "{}: torrent uploaded",
                     format!("[ffff: {}]", t.name).magenta()
                 );
+                Some(t.info_hash().to_lowercase())
             }
-            Err(_) => info!("New torrent uploaded"),
-        };
+            Err(_) => {
+                info!("New torrent uploaded");
+                None
+            }
+        }
     } else {
         // Magnet links
         let magnet_url = arguments["filename"].as_str().unwrap();
@@ -44,14 +56,34 @@ pub(crate) async fn handle_torrent_add(
             Ok(m) if m.dn.is_some() => {
                 info!(
                     "{}: magnet link uploaded",
-                    format!("[ffff: {}]", urldecode::decode(m.dn.unwrap())).magenta()
+                    format!("[ffff: {}]", urldecode::decode(m.dn.clone().unwrap())).magenta()
                 );
+                m.xt
+                    .as_deref()
+                    .and_then(|xt| xt.strip_prefix("urn:btih:"))
+                    .map(|h| h.to_lowercase())
             }
-            _ => {
+            Ok(m) => {
                 info!("unknown magnet link uploaded");
+                m.xt
+                    .as_deref()
+                    .and_then(|xt| xt.strip_prefix("urn:btih:"))
+                    .map(|h| h.to_lowercase())
+            }
+            Err(_) => {
+                info!("unknown magnet link uploaded");
+                None
             }
         }
     };
+
+    if let Some(h) = hash {
+        if !labels.is_empty() {
+            let mut store = app_data.labels_store.write().unwrap();
+            store.insert(h, labels);
+        }
+    }
+
     Ok(None)
 }
 
@@ -102,10 +134,22 @@ pub(crate) async fn handle_torrent_get(
 ) -> Option<serde_json::Value> {
     let transfers = putio::list_transfers(api_token).await.unwrap().transfers;
 
-    let transmission_transfers = transfers.into_iter().map(|t| async {
-        let mut tt: TransmissionTorrent = t.into();
-        tt.download_dir = app_data.config.download_directory.clone();
-        tt
+    let labels_snapshot: std::collections::HashMap<String, Vec<String>> = {
+        let store = app_data.labels_store.read().unwrap();
+        store.clone()
+    };
+
+    let transmission_transfers = transfers.into_iter().map(|t| {
+        let labels_snapshot = labels_snapshot.clone();
+        let download_dir = app_data.config.download_directory.clone();
+        async move {
+            let mut tt: TransmissionTorrent = t.into();
+            tt.download_dir = download_dir;
+            if let Some(labels) = labels_snapshot.get(&tt.hash_string.to_lowercase()) {
+                tt.labels = labels.clone();
+            }
+            tt
+        }
     });
     let transmission_transfers: Vec<TransmissionTorrent> =
         futures::future::join_all(transmission_transfers).await;

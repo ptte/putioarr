@@ -53,7 +53,7 @@ impl Default for TransmissionConfig {
 #[serde(rename_all = "camelCase")]
 pub struct TransmissionTorrent {
     pub id: u64,
-    pub hash_string: Option<String>,
+    pub hash_string: String,
     pub name: String,
     pub download_dir: String,
     pub total_size: i64,
@@ -69,6 +69,7 @@ pub struct TransmissionTorrent {
     pub seed_idle_limit: u64,
     pub seed_idle_mode: u32,
     pub file_count: u32,
+    pub labels: Vec<String>,
 }
 
 impl From<PutIOTransfer> for TransmissionTorrent {
@@ -87,7 +88,7 @@ impl From<PutIOTransfer> for TransmissionTorrent {
         let name = t.name.as_ref().unwrap_or(default);
         Self {
             id: t.id,
-            hash_string: t.hash,
+            hash_string: t.hash.unwrap_or_else(|| format!("{:040x}", t.id)),
             name: name.clone(),
             download_dir: String::from(""),
             total_size: t.size.unwrap_or(0),
@@ -103,11 +104,12 @@ impl From<PutIOTransfer> for TransmissionTorrent {
             seed_idle_limit: 0,
             seed_idle_mode: 0,
             file_count: 1,
+            labels: vec![],
         }
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub enum TransmissionTorrentStatus {
     Stopped = 0,
     CheckWait = 1,
@@ -116,6 +118,20 @@ pub enum TransmissionTorrentStatus {
     Downloading = 4,
     SeedingWait = 5,
     Seeding = 6,
+}
+
+impl Serialize for TransmissionTorrentStatus {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u8(match self {
+            Self::Stopped => 0,
+            Self::CheckWait => 1,
+            Self::Check => 2,
+            Self::Queued => 3,
+            Self::Downloading => 4,
+            Self::SeedingWait => 5,
+            Self::Seeding => 6,
+        })
+    }
 }
 
 impl From<String> for TransmissionTorrentStatus {

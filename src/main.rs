@@ -1,6 +1,8 @@
 use crate::{http::routes, services::putio};
 use actix_web::{web, App, HttpServer};
 use anyhow::{bail, Context, Result};
+use std::collections::HashMap;
+use std::sync::RwLock;
 use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
 use env_logger::TimestampPrecision;
@@ -73,6 +75,7 @@ pub struct ArrConfig {
 
 pub struct AppData {
     pub config: Config,
+    pub labels_store: RwLock<HashMap<String, Vec<String>>>,
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -122,6 +125,7 @@ async fn main() -> Result<()> {
 
             let app_data = web::Data::new(AppData {
                 config: config.clone(),
+                labels_store: RwLock::new(HashMap::new()),
             });
 
             match putio::account_info(&app_data.config.putio.api_key).await {

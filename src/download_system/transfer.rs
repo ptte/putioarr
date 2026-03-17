@@ -69,8 +69,9 @@ impl Transfer {
             // Check if ANY of the service_results are true and put the outcome in results
             results.push(service_results.into_iter().any(|x| x));
         }
-        // Check if all targets have been imported
-        results.into_iter().all(|x| x)
+        // Check if any target has been imported (Radarr/Sonarr only imports the
+        // main media file, not extras/featurettes bundled in the same torrent)
+        results.into_iter().any(|x| x)
     }
 
     pub async fn get_download_targets(&self) -> Result<Vec<DownloadTarget>> {

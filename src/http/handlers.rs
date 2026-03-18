@@ -81,6 +81,9 @@ pub(crate) async fn handle_torrent_add(
         if !labels.is_empty() {
             let mut store = app_data.labels_store.write().unwrap();
             store.insert(h, labels);
+            if let Ok(data) = serde_json::to_string(&*store) {
+                let _ = std::fs::write(&app_data.labels_file, data);
+            }
         }
     }
 
@@ -142,9 +145,19 @@ pub(crate) async fn handle_torrent_get(
     let transmission_transfers = transfers.into_iter().map(|t| {
         let labels_snapshot = labels_snapshot.clone();
         let download_dir = app_data.config.download_directory.clone();
+        let api_token = api_token.to_string();
+        let file_id = t.file_id;
         async move {
             let mut tt: TransmissionTorrent = t.into();
             tt.download_dir = download_dir;
+            // Use the put.io file name instead of the transfer name so that Radarr/Sonarr
+            // compute the correct outputPath. Transfer names often include site prefixes
+            // (e.g. "www.UIndex.org - ...") that differ from the actual downloaded file name.
+            if let Some(fid) = file_id {
+                if let Ok(resp) = putio::list_files(&api_token, fid).await {
+                    tt.name = resp.parent.name;
+                }
+            }
             if let Some(labels) = labels_snapshot.get(&tt.hash_string.to_lowercase()) {
                 tt.labels = labels.clone();
             }

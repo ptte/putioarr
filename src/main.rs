@@ -2,6 +2,7 @@ use crate::{http::routes, services::putio};
 use actix_web::{web, App, HttpServer};
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::RwLock;
 use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
@@ -76,6 +77,7 @@ pub struct ArrConfig {
 pub struct AppData {
     pub config: Config,
     pub labels_store: RwLock<HashMap<String, Vec<String>>>,
+    pub labels_file: PathBuf,
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -123,9 +125,20 @@ async fn main() -> Result<()> {
 
             info!("Starting putioarr, version {}", VERSION);
 
+            let labels_file = PathBuf::from(&args.config_path)
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("/config"))
+                .join("labels.json");
+            let labels_store: HashMap<String, Vec<String>> =
+                std::fs::read_to_string(&labels_file)
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
+
             let app_data = web::Data::new(AppData {
                 config: config.clone(),
-                labels_store: RwLock::new(HashMap::new()),
+                labels_store: RwLock::new(labels_store),
+                labels_file,
             });
 
             match putio::account_info(&app_data.config.putio.api_key).await {

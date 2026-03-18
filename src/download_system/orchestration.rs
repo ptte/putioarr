@@ -73,11 +73,15 @@ impl Worker {
                         all_downloaded.push(done_rx.recv().await?);
                     }
 
-                    // Check if all are success
-                    if all_downloaded.iter().all(|d| match d {
+                    // Proceed if at least one file downloaded (Radarr/Sonarr only
+                    // import the main media file; extras/featurettes may fail)
+                    if all_downloaded.iter().any(|d| match d {
                         DownloadDoneStatus::Success => true,
                         DownloadDoneStatus::Failed => false,
                     }) {
+                        if all_downloaded.iter().any(|d| matches!(d, DownloadDoneStatus::Failed)) {
+                            warn!("{}: some targets failed to download, proceeding anyway", t);
+                        }
                         info!("{}: download {}", t, "done".blue());
                         self.tx
                             .send(TransferMessage::Downloaded(Transfer {
@@ -86,8 +90,7 @@ impl Worker {
                             }))
                             .await?;
                     } else {
-                        // TODO: figure out what to do here..
-                        warn!("{}: not all targets downloaded", t)
+                        warn!("{}: all targets failed to download", t)
                     }
                 }
                 TransferMessage::Downloaded(t) => {

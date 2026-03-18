@@ -9,9 +9,34 @@ use anyhow::Result;
 use base64::Engine;
 use colored::Colorize;
 use lava_torrent::torrent::v1::Torrent;
-use log::info;
+use log::{info, warn};
 use magnet_url::Magnet;
 use serde_json::json;
+
+/// Magnet links may encode the infohash as 32-char base32 instead of 40-char hex.
+/// This converts base32 to lowercase hex so it matches put.io's hash format.
+fn normalize_infohash(hash: &str) -> String {
+    if hash.len() == 32 {
+        let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        let upper = hash.to_uppercase();
+        let mut bits: u64 = 0;
+        let mut bit_count = 0;
+        let mut out = String::with_capacity(40);
+        for ch in upper.bytes() {
+            if let Some(val) = alphabet.iter().position(|&b| b == ch) {
+                bits = (bits << 5) | val as u64;
+                bit_count += 5;
+                if bit_count >= 8 {
+                    bit_count -= 8;
+                    out.push_str(&format!("{:02x}", (bits >> bit_count) & 0xFF));
+                }
+            }
+        }
+        out
+    } else {
+        hash.to_lowercase()
+    }
+}
 
 pub(crate) async fn handle_torrent_add(
     api_token: &str,
@@ -61,14 +86,14 @@ pub(crate) async fn handle_torrent_add(
                 m.xt
                     .as_deref()
                     .and_then(|xt| xt.strip_prefix("urn:btih:"))
-                    .map(|h| h.to_lowercase())
+                    .map(normalize_infohash)
             }
             Ok(m) => {
                 info!("unknown magnet link uploaded");
                 m.xt
                     .as_deref()
                     .and_then(|xt| xt.strip_prefix("urn:btih:"))
-                    .map(|h| h.to_lowercase())
+                    .map(normalize_infohash)
             }
             Err(_) => {
                 info!("unknown magnet link uploaded");
@@ -77,12 +102,16 @@ pub(crate) async fn handle_torrent_add(
         }
     };
 
+    warn!("torrent-add: hash={:?} labels={:?}", hash, labels);
+
     if let Some(h) = hash {
         if !labels.is_empty() {
             let mut store = app_data.labels_store.write().unwrap();
             store.insert(h, labels);
             if let Ok(data) = serde_json::to_string(&*store) {
-                let _ = std::fs::write(&app_data.labels_file, data);
+                if let Err(e) = std::fs::write(&app_data.labels_file, data) {
+                    warn!("Failed to persist labels: {}", e);
+                }
             }
         }
     }

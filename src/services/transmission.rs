@@ -97,7 +97,11 @@ impl From<PutIOTransfer> for TransmissionTorrent {
             eta: t.estimated_time.unwrap_or(0),
             status: TransmissionTorrentStatus::from(t.status),
             seconds_downloading,
-            error_string: t.error_message,
+            // Clear stale put.io error messages once a transfer has completed.
+            // put.io often retains errors like "not enough space" from the initial
+            // queue attempt even after the transfer finishes seeding. Sonarr/Radarr
+            // treat any non-empty errorString as a failed download and skip import.
+            error_string: if t.finished_at.is_some() { None } else { t.error_message },
             downloaded_ever: t.downloaded.unwrap_or(0),
             seed_ratio_limit: 0.0,
             seed_ratio_mode: 0,

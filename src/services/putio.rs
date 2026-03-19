@@ -147,7 +147,7 @@ pub async fn delete_file(api_token: &str, file_id: i64) -> Result<()> {
     Ok(())
 }
 
-pub async fn add_transfer(api_token: &str, url: &str) -> Result<()> {
+pub async fn add_transfer(api_token: &str, url: &str) -> Result<Option<String>> {
     let client = reqwest::Client::new();
     let form = multipart::Form::new().text("url", url.to_string());
     let response = client
@@ -162,10 +162,22 @@ pub async fn add_transfer(api_token: &str, url: &str) -> Result<()> {
         bail!("Error adding url: {} to put.io: {}", url, response.status());
     }
 
-    Ok(())
+    let hash = response
+        .json::<GetTransferResponse>()
+        .await
+        .ok()
+        .and_then(|r| r.transfer.hash)
+        .map(|h| h.to_lowercase());
+
+    Ok(hash)
 }
 
-pub async fn upload_file(api_token: &str, bytes: &[u8]) -> Result<()> {
+#[derive(Debug, Deserialize)]
+struct UploadFileResponse {
+    transfer: Option<PutIOTransfer>,
+}
+
+pub async fn upload_file(api_token: &str, bytes: &[u8]) -> Result<Option<String>> {
     let client = reqwest::Client::new();
     let file_part = multipart::Part::bytes(bytes.to_owned()).file_name("foo.torrent");
 
@@ -184,8 +196,16 @@ pub async fn upload_file(api_token: &str, bytes: &[u8]) -> Result<()> {
     if !response.status().is_success() {
         bail!("Error uploading file to put.io: {}", response.status());
     }
-    // Todo: error if invalid request
-    Ok(())
+
+    let hash = response
+        .json::<UploadFileResponse>()
+        .await
+        .ok()
+        .and_then(|r| r.transfer)
+        .and_then(|t| t.hash)
+        .map(|h| h.to_lowercase());
+
+    Ok(hash)
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UrlResponse {

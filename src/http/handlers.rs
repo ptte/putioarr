@@ -53,53 +53,58 @@ pub(crate) async fn handle_torrent_add(
         .unwrap_or_default();
 
     let hash: Option<String> = if arguments.contains_key("metainfo") {
-        // .torrent files
+        // .torrent files — prefer hash from put.io response, fall back to local parse
         let b64 = arguments["metainfo"].as_str().unwrap();
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(b64)
             .unwrap();
-        putio::upload_file(api_token, &bytes).await?;
+        let putio_hash = putio::upload_file(api_token, &bytes).await?;
 
-        match Torrent::read_from_bytes(bytes) {
-            Ok(t) => {
-                info!(
-                    "{}: torrent uploaded",
-                    format!("[ffff: {}]", t.name).magenta()
-                );
-                Some(t.info_hash().to_lowercase())
+        putio_hash.or_else(|| {
+            match Torrent::read_from_bytes(bytes) {
+                Ok(t) => {
+                    info!(
+                        "{}: torrent uploaded",
+                        format!("[ffff: {}]", t.name).magenta()
+                    );
+                    Some(t.info_hash().to_lowercase())
+                }
+                Err(_) => {
+                    info!("New torrent uploaded");
+                    None
+                }
             }
-            Err(_) => {
-                info!("New torrent uploaded");
-                None
-            }
-        }
+        })
     } else {
-        // Magnet links
+        // Magnet links — prefer hash from put.io response, fall back to xt parsing
         let magnet_url = arguments["filename"].as_str().unwrap();
-        putio::add_transfer(api_token, magnet_url).await?;
-        match Magnet::new(magnet_url) {
-            Ok(m) if m.dn.is_some() => {
-                info!(
-                    "{}: magnet link uploaded",
-                    format!("[ffff: {}]", urldecode::decode(m.dn.clone().unwrap())).magenta()
-                );
-                m.xt
-                    .as_deref()
-                    .and_then(|xt| xt.strip_prefix("urn:btih:"))
-                    .map(normalize_infohash)
+        let putio_hash = putio::add_transfer(api_token, magnet_url).await?;
+
+        putio_hash.or_else(|| {
+            match Magnet::new(magnet_url) {
+                Ok(m) if m.dn.is_some() => {
+                    info!(
+                        "{}: magnet link uploaded",
+                        format!("[ffff: {}]", urldecode::decode(m.dn.clone().unwrap())).magenta()
+                    );
+                    m.xt
+                        .as_deref()
+                        .and_then(|xt| xt.strip_prefix("urn:btih:"))
+                        .map(normalize_infohash)
+                }
+                Ok(m) => {
+                    info!("unknown magnet link uploaded");
+                    m.xt
+                        .as_deref()
+                        .and_then(|xt| xt.strip_prefix("urn:btih:"))
+                        .map(normalize_infohash)
+                }
+                Err(_) => {
+                    info!("unknown magnet link uploaded");
+                    None
+                }
             }
-            Ok(m) => {
-                info!("unknown magnet link uploaded");
-                m.xt
-                    .as_deref()
-                    .and_then(|xt| xt.strip_prefix("urn:btih:"))
-                    .map(normalize_infohash)
-            }
-            Err(_) => {
-                info!("unknown magnet link uploaded");
-                None
-            }
-        }
+        })
     };
 
     warn!("torrent-add: hash={:?} labels={:?}", hash, labels);
